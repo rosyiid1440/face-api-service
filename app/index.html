@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Deteksi Wajah Real-Time LAN</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body { 
+            font-family: sans-serif; 
+            text-align: center; 
+            margin: 0; 
+            padding: 20px; 
+            background-color: #f5f5f5; 
+        }
+        .container { 
+            max-width: 500px; 
+            margin: 0 auto; 
+        }
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+        }
+        video { 
+            width: 100%; 
+            border-radius: 12px; 
+            background: #222; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }
+        /* Efek cermin hanya untuk kamera depan, kita atur dinamis lewat JavaScript */
+        .mirror {
+            transform: scaleX(-1); 
+        }
+        #btn-ganti {
+            margin-top: 10px;
+            padding: 10px 20px;
+            font-size: 1rem;
+            font-weight: bold;
+            color: white;
+            background-color: #007bff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        #btn-ganti:active {
+            background-color: #0056b3;
+        }
+        #result { 
+            margin-top: 15px; 
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            color: #333; 
+            font-size: 1.1rem; 
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Kamera Deteksi Wajah (LAN)</h2>
+        <div class="video-wrapper">
+            <video id="video" autoplay playsinline></video>
+        </div>
+        <button id="btn-ganti">🔄 Ganti Kamera</button>
+        <canvas id="canvas" style="display:none;"></canvas>
+        <div id="result">Menginisialisasi Kamera...</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const resultText = document.getElementById('result');
+        const btnGanti = document.getElementById('btn-ganti');
+        const context = canvas.getContext('2d');
+
+        // "user" = kamera depan, "environment" = kamera belakang
+        let currentFacingMode = "user"; 
+
+        // Fungsi untuk menyalakan kamera sesuai mode yang dipilih
+        function startKamera(mode) {
+            resultText.innerText = "Menginisialisasi Kamera...";
+            
+            // Matikan kamera yang aktif sebelumnya jika ada (untuk mencegah bentrok resource)
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+
+            // Atur efek cermin di layar HP secara visual
+            if (mode === "user") {
+                video.classList.add('mirror'); // Kamera depan pakai efek cermin
+            } else {
+                video.classList.remove('mirror'); // Kamera belakang normal
+            }
+
+            navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: mode } 
+            })
+            .then(stream => { 
+                video.srcObject = stream; 
+                resultText.innerText = "Mencari wajah...";
+            })
+            .catch(err => { 
+                resultText.innerText = "Gagal akses kamera! Pastikan menggunakan HTTPS.";
+                console.error(err); 
+            });
+        }
+
+        // Jalankan kamera depan saat pertama kali halaman dibuka
+        startKamera(currentFacingMode);
+
+        // Event Listener untuk tombol ganti kamera
+        btnGanti.addEventListener('click', () => {
+            currentFacingMode = (currentFacingMode === "user") ? "environment" : "user";
+            startKamera(currentFacingMode);
+        });
+
+        // Kirim frame ke AI setiap 2 detik
+        function kirimFrame() {
+    if (video.srcObject && video.videoWidth > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        context.save();
+        if (currentFacingMode === "user") {
+            context.translate(canvas.width, 0);
+            context.scale(-1, 1);
+        }
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        context.restore();
+
+        canvas.toBlob(blob => {
+            let formData = new FormData();
+            formData.append('file', blob, 'frame.jpg');
+
+            fetch(`${window.location.origin}/api/v1/recognize`, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if(data.status === "success" && data.faces_detected > 0) {
+                    let nama = data.data[0].name;
+                    let kelas = data.data[0].student_class;
+                    let confidence = data.data[0].confidence;
+                    
+                    if (nama !== "Unknown") {
+                        resultText.innerHTML = `
+                            Terdeteksi: <span style="color: green;">${nama}</span> (${confidence})<br>
+                            <span style="font-size: 1rem; color: #666;">Kelas: ${kelas}</span>
+                        `;
+                    } else {
+                        resultText.innerHTML = `<span style="color: red;">Wajah Tidak Dikenali</span>`;
+                    }
+                } else {
+                    resultText.innerHTML = `<span style="color: gray;">Mencari Wajah...</span>`;
+                }
+
+                // --- KUNCI KECEPATAN DI SINI ---
+                // Setelah mendapat respons sukses, tunggu 1 detik lalu kirim frame berikutnya.
+                // Ini mencegah antrean request di jaringan LAN.
+                setTimeout(kirimFrame, 1000); 
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                // Jika terjadi error jaringan, tetap coba kirim lagi setelah 3 detik
+                setTimeout(kirimFrame, 3000);
+            });
+        }, 'image/jpeg', 0.7); // Kita turunkan kualitas ke 70% agar file sangat ringan (transmisi kilat)
+    } else {
+        // Jika video belum siap, cek lagi dalam 500ms
+        setTimeout(kirimFrame, 500);
+    }
+}
+
+// Pemicu pertama kali saat kamera sudah mulai menyala
+video.addEventListener('loadedmetadata', () => {
+    kirimFrame();
+});
+    </script>
+</body>
+</html>

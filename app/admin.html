@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Admin - Registrasi Wajah Siswa</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; color: #333; }
+        .admin-box { max-width: 600px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h2 { text-align: center; margin-top: 0; color: #007bff; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.9rem; }
+        input, select { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; font-size: 1rem; }
+        .camera-section { text-align: center; margin: 20px 0; background: #222; border-radius: 8px; padding: 10px; position: relative; }
+        video { width: 100%; max-width: 400px; border-radius: 6px; background: #000; transform: scaleX(-1); }
+        button { width: 100%; padding: 12px; font-size: 1.1rem; font-weight: bold; color: white; background-color: #28a745; border: none; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+        button:hover { background-color: #218838; }
+        #status-msg { margin-top: 15px; padding: 10px; border-radius: 6px; font-weight: bold; text-align: center; display: none; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .nav-link { text-align: center; display: block; margin-top: 15px; color: #007bff; text-decoration: none; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+
+<div class="admin-box">
+    <h2>Pendaftaran Siswa & Wajah Baru</h2>
+    
+    <!-- Form Biodata Siswa -->
+    <div class="form-group">
+        <label>NISN</label>
+        <input type="text" id="nisn" placeholder="Contoh: 0056123456" required>
+    </div>
+    <div class="form-group">
+        <label>Nama Lengkap Siswa</label>
+        <input type="text" id="name" placeholder="Nama sesuai absen" required>
+    </div>
+    <div class="form-group">
+        <label>Jenis Kelamin</label>
+        <select id="gender">
+            <option value="L">Laki-laki</option>
+            <option value="P">Perempuan</option>
+        </select>
+    </div>
+    <div class="form-group" style="display: flex; gap: 10px;">
+        <div style="flex: 1;">
+            <label>Kelas</label>
+            <select id="class">
+                <option value="X">X</option>
+                <option value="XI">XI</option>
+                <option value="XII">XII</option>
+            </select>
+        </div>
+        <div style="flex: 1;">
+            <label>Jurusan</label>
+            <input type="text" id="major" placeholder="Contoh: RPL, TKJ, MIPA" required>
+        </div>
+        <div style="flex: 1;">
+            <label>Nomor Urut</label>
+            <input type="text" id="class_number" placeholder="Contoh: 1, 2" required>
+        </div>
+    </div>
+
+    <!-- Area Kamera Training -->
+    <label>Posisikan Wajah di Kamera Depan Laptop/HP</label>
+    <div class="camera-section">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+    </div>
+
+    <button id="btn-submit">💾 Daftarkan Siswa & Ambil Foto</button>
+    <div id="status-msg"></div>
+    <a href="/" class="nav-link">← Kembali ke Kamera Scanner Utama</a>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const btnSubmit = document.getElementById('btn-submit');
+    const statusMsg = document.getElementById('status-msg');
+    const context = canvas.getContext('2d');
+
+    // Hidupkan Kamera saat halaman terbuka
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+        .then(stream => { video.srcObject = stream; })
+        .catch(err => { showStatus("Kamera diblokir atau tidak ditemukan!", "error"); });
+
+    function showStatus(text, type) {
+        statusMsg.innerText = text;
+        statusMsg.className = type;
+        statusMsg.style.display = 'block';
+    }
+
+    btnSubmit.addEventListener('click', async () => {
+        // Ambil value form
+        const nisn = document.getElementById('nisn').value.trim();
+        const name = document.getElementById('name').value.trim();
+        const gender = document.getElementById('gender').value;
+        const studentClass = document.getElementById('class').value;
+        const major = document.getElementById('major').value.trim();
+        const classNumber = document.getElementById('class_number').value.trim();
+
+        if(!nisn || !name || !major || !classNumber || !video.srcObject) {
+            showStatus("Mohon lengkapi semua form dan pastikan kamera aktif!", "error");
+            return;
+        }
+
+        btnSubmit.disabled = true;
+        showStatus("Sedang mendaftarkan profil siswa...", "success");
+
+        try {
+            // Langkah 1: Buat Akun Siswa di Database
+            const resStudent = await fetch(`${window.location.origin}/api/v1/students`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    nisn: nisn, name: name, gender: gender,
+                    student_class: studentClass, major: major, class_number: classNumber
+                })
+            });
+            
+            const dataStudent = await resStudent.json();
+            if (!resStudent.ok) throw new Error(dataStudent.detail || "Gagal membuat profil siswa");
+
+            const studentId = dataStudent.student_id;
+            showStatus(`Profil berhasil dibuat (ID: ${studentId}). Sedang memproses wajah...`, "success");
+
+            // Langkah 2: Ambil Frame Gambar dari Kamera
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.save();
+            // Kembalikan efek mirror sebelum di-upload ke backend
+            context.translate(canvas.width, 0);
+            context.scale(-1, 1);
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            context.restore();
+
+            // Konversi ke blob gambar
+            canvas.toBlob(async (blob) => {
+                let formData = new FormData();
+                formData.append('student_id', studentId);
+                formData.append('file', blob, 'training_face.jpg');
+
+                // Langkah 3: Kirim Wajah ke API /train (Gunakan KunciRahasia Anda di Header)
+                const resFace = await fetch(`${window.location.origin}/api/v1/train`, {
+                    method: 'POST',
+                    headers: { 'X-API-Key': 'KunciRahasiaMicroserviceWajah123!' }, // Menggunakan API Key yang kita buat sebelumnya
+                    body: formData
+                });
+
+                const dataFace = await resFace.json();
+                btnSubmit.disabled = false;
+
+                if (resFace.ok) {
+                    showStatus(`Sukses! Siswa bernama "${name}" beserta data wajahnya berhasil didaftarkan.`, "success");
+                    // Reset Form Input
+                    document.getElementById('nisn').value = '';
+                    document.getElementById('name').value = '';
+                    document.getElementById('major').value = '';
+                    document.getElementById('class_number').value = '';
+                } else {
+                    throw new Error(dataFace.detail || "Gagal membaca struktur wajah. Coba posisi wajah lebih tegak.");
+                }
+            }, 'image/jpeg', 0.9);
+
+        } catch (error) {
+            showStatus(error.message, "error");
+            btnSubmit.disabled = false;
+        }
+    });
+</script>
+</body>
+</html>
